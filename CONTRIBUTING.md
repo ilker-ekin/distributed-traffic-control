@@ -157,3 +157,30 @@ PRs should:
 For design changes with significant distributed-systems impact, open an issue before implementing a large change. Explain the trade-offs and proposed approach so the design can be discussed before code is written.
 
 Thank you for helping improve the project.
+
+## Updating container image versions
+
+The `docker-compose.yml` pins Jaeger, Prometheus, Grafana, and Redis to specific reviewed tags via environment variables (with defaults). This keeps local stacks reproducible.
+
+Default versions (as of the pin commit):
+
+- Redis: `7.4-alpine`
+- Jaeger: `2.22.0`
+- Prometheus: `v3.13.4` (LTS line)
+- Grafana: `13.2.4`
+
+To override temporarily:
+
+```bash
+cp .env.example .env
+# edit .env
+docker compose up -d
+```
+
+### Process for updating a pinned version
+
+1. Review the upstream release notes and changelog for breaking changes.
+2. Update the default in `docker-compose.yml` and the value in `.env.example`.
+3. Run `docker compose pull` and `docker compose up -d` to verify the stack starts and healthchecks pass.
+4. Smoke-test tracing (Jaeger UI), metrics (Prometheus targets), and dashboards (Grafana).
+5. Document the new versions and any required config adjustments in the PR.
