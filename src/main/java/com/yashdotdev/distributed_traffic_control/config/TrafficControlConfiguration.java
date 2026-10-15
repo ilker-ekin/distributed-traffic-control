@@ -6,6 +6,7 @@ import com.yashdotdev.distributed_traffic_control.allocation.CapacityAllocator;
 import com.yashdotdev.distributed_traffic_control.allocation.FixedAllocationStrategy;
 import com.yashdotdev.distributed_traffic_control.allocation.InMemoryCapacityAllocator;
 import com.yashdotdev.distributed_traffic_control.lease.*;
+import com.yashdotdev.distributed_traffic_control.lease.DistributedTokenBucket;
 import com.yashdotdev.distributed_traffic_control.monitoring.TrafficControlMetrics;
 import com.yashdotdev.distributed_traffic_control.policy.*;
 import com.yashdotdev.distributed_traffic_control.quota.InMemoryQuotaCoordinator;
@@ -85,13 +86,16 @@ public class TrafficControlConfiguration {
             QuotaCoordinator quotaCoordinator,
             CapacityAllocator capacityAllocator,
             TrafficControlMetrics metrics,
-            ObservationRegistry observationRegistry) {
+            ObservationRegistry observationRegistry,
+            DistributedTokenBucket distributedTokenBucket) {
+
         return new TrafficDecisionEngine(
                 policyProvider,
                 quotaCoordinator,
                 capacityAllocator,
                 metrics,
-                observationRegistry);
+                observationRegistry,
+                distributedTokenBucket);
     }
 
     @Bean

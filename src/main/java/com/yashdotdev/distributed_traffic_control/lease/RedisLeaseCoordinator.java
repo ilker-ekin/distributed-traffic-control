@@ -13,11 +13,109 @@ import java.util.List;
 import java.util.Optional;
 import java.util.UUID;
 
-public class RedisLeaseCoordinator implements LeaseCoordinator {
+public class RedisLeaseCoordinator
+        implements LeaseCoordinator, DistributedTokenBucket {
 
     private static final String QUOTA_KEY_PREFIX = "traffic-control:quota:";
     private static final String LEASE_KEY_PREFIX = "traffic-control:lease:";
     private static final String LEASE_REGISTRY_SUFFIX = ":leases";
+
+
+    private static final String TOKEN_BUCKET_KEY_PREFIX =
+            "traffic-control:token-bucket:";
+
+    private static final DefaultRedisScript<Long> TOKEN_BUCKET_SCRIPT =
+            new DefaultRedisScript<>("""
+                local capacity = tonumber(ARGV[1])
+                local refillRate = tonumber(ARGV[2])
+
+                -- Use Redis server time so all gateways share one clock.
+                local redisTime = redis.call('TIME')
+                local now = tonumber(redisTime[1]) * 1000
+                    + math.floor(tonumber(redisTime[2]) / 1000)
+
+                if not capacity or capacity <= 0
+                   or not refillRate or refillRate <= 0 then
+                    return -1
+                end
+
+                -- Read the current shared bucket state.
+                local state = redis.call(
+                    'HMGET',
+                    KEYS[1],
+                    'tokens',
+                    'lastRefillMillis'
+                )
+
+                local tokens = tonumber(state[1])
+                local lastRefill = tonumber(state[2])
+
+                -- Initialize a missing bucket with full capacity.
+                if not tokens or not lastRefill then
+                    tokens = capacity
+                    lastRefill = now
+                end
+
+                -- Refill proportionally to elapsed time, capped at capacity.
+                if now > lastRefill then
+                    local elapsed = now - lastRefill
+
+                    tokens = math.min(
+                        capacity,
+                        tokens + elapsed * refillRate / 1000
+                    )
+
+                    lastRefill = now
+                end
+
+                -- Reject without consuming when fewer than one token remains.
+                if tokens < 1 then
+                    redis.call(
+                        'HSET',
+                        KEYS[1],
+                        'tokens', tostring(tokens),
+                        'lastRefillMillis', tostring(lastRefill)
+                    )
+
+                    return -1
+                end
+
+                -- Atomically consume one token.
+                tokens = tokens - 1
+
+                redis.call(
+                    'HSET',
+                    KEYS[1],
+                    'tokens', tostring(tokens),
+                    'lastRefillMillis', tostring(lastRefill)
+                )
+
+                return math.floor(tokens)
+                """, Long.class);
+
+
+
+    private static final DefaultRedisScript<Long> INITIALIZE_TOKEN_BUCKET_SCRIPT =
+            new DefaultRedisScript<>("""
+                if redis.call('EXISTS', KEYS[1]) == 1 then
+                    return 0
+                end
+
+                local redisTime = redis.call('TIME')
+                local now = tonumber(redisTime[1]) * 1000
+                    + math.floor(tonumber(redisTime[2]) / 1000)
+
+                redis.call(
+                    'HSET',
+                    KEYS[1],
+                    'tokens', ARGV[1],
+                    'lastRefillMillis', tostring(now)
+                )
+
+                return 1
+                """, Long.class);
+
+
 
     /**
      * Atomically:
@@ -380,19 +478,37 @@ public class RedisLeaseCoordinator implements LeaseCoordinator {
         }
 
         if (capacity <= 0) {
-            throw new IllegalArgumentException("capacity must be greater than zero");
+            throw new IllegalArgumentException(
+                    "capacity must be greater than zero");
         }
-        redisTemplate.opsForValue().setIfAbsent(buildGlobalCapacityRedisKey(capacityKey), String.valueOf(capacity));
+
+        redisTemplate.opsForValue().setIfAbsent(
+                buildGlobalCapacityRedisKey(capacityKey),
+                String.valueOf(capacity));
+
+        redisTemplate.execute(
+                INITIALIZE_TOKEN_BUCKET_SCRIPT,
+                List.of(buildTokenBucketRedisKey(capacityKey)),
+                String.valueOf(capacity));
     }
 
     @Override
     public boolean removeCapacity(GlobalCapacityKey capacityKey) {
         if (capacityKey == null) {
-            throw new IllegalArgumentException("capacityKey must not be null");
+            throw new IllegalArgumentException(
+                    "capacityKey must not be null");
         }
-        Boolean deleted = redisTemplate.delete(buildGlobalCapacityRedisKey(capacityKey));
-        return Boolean.TRUE.equals(deleted);
+
+        Boolean capacityDeleted = redisTemplate.delete(
+                buildGlobalCapacityRedisKey(capacityKey));
+
+        Boolean tokenBucketDeleted = redisTemplate.delete(
+                buildTokenBucketRedisKey(capacityKey));
+
+        return Boolean.TRUE.equals(capacityDeleted)
+                || Boolean.TRUE.equals(tokenBucketDeleted);
     }
+
 
     @Override
     public Optional<QuotaLease> acquireLease(QuotaKey quotaKey, String nodeId, long requestedCapacity, Duration leaseDuration) {
@@ -531,9 +647,35 @@ public class RedisLeaseCoordinator implements LeaseCoordinator {
         return Long.valueOf(1L).equals(result);
     }
 
+    @Override
+    public long tryConsume(GlobalCapacityKey capacityKey, long capacity, long refillRate, Instant currentTime) {
+
+        if (capacityKey == null) {
+            throw new IllegalArgumentException("capacityKey must not be null");
+        }
+        if (capacity <= 0 || refillRate <= 0) {
+            throw new IllegalArgumentException("capacity and refillRate must be greater than zero");
+        }
+        if (currentTime == null) {
+            throw new IllegalArgumentException("currentTime must not be null");
+        }
+        String key = TOKEN_BUCKET_KEY_PREFIX + capacityKey.policyId() + ":" + capacityKey.resource();
+        Long result = observe("redis.token-bucket.consume",
+                () -> redisTemplate.execute(TOKEN_BUCKET_SCRIPT, List.of(key),
+                        String.valueOf(capacity), String.valueOf(refillRate)));
+
+        return result == null ? -1L : result;
+    }
+
     private String buildGlobalCapacityRedisKey(GlobalCapacityKey capacityKey) {
         return QUOTA_KEY_PREFIX + capacityKey.policyId() + ":" + capacityKey.resource();
     }
+
+    private String buildTokenBucketRedisKey(GlobalCapacityKey capacityKey) {
+        return TOKEN_BUCKET_KEY_PREFIX
+                + capacityKey.policyId() + ":" + capacityKey.resource();
+    }
+
     private String buildLeaseRegistryRedisKey(GlobalCapacityKey capacityKey) {
         return buildGlobalCapacityRedisKey(capacityKey) + LEASE_REGISTRY_SUFFIX;
     }

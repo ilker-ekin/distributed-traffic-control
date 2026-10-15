@@ -207,13 +207,43 @@ class RedisLeaseCoordinatorIntegrationTest {
         assertEquals("node-b", replacementLease.get().getNodeId());
     }
 
+    @Test
+    void shouldRefillGlobalCapacityOverTime() throws InterruptedException {
+        RedisLeaseCoordinator coordinator = new RedisLeaseCoordinator(createRedisTemplate());
+        GlobalCapacityKey capacityKey = new GlobalCapacityKey("refill-policy", "/api/orders");
+        for (int i = 0; i < 5; i++) {
+            long remaining = coordinator.tryConsume(capacityKey, 5, 1, Instant.now());
+            assertTrue(remaining >= 0, "Expected the initial bucket to allow 5 requests");
+        }
+        assertEquals(-1L, coordinator.tryConsume(capacityKey, 5, 1,
+                Instant.now()), "Expected the bucket to be exhausted");
+        Thread.sleep(1100);
+        assertTrue(coordinator.tryConsume(capacityKey, 5, 1,
+                Instant.now()) >= 0, "Expected a refilled token to be available");
+    }
+
+    @Test
+    void shouldShareTokenBucketAcrossCoordinatorInstances() {
+        RedisLeaseCoordinator firstCoordinator = new RedisLeaseCoordinator(createRedisTemplate());
+        RedisLeaseCoordinator secondCoordinator = new RedisLeaseCoordinator(createRedisTemplate());
+
+        GlobalCapacityKey capacityKey = new GlobalCapacityKey("shared-token-bucket-policy", "/api/shared-test");
+        for (int i = 0; i < 3; i++) {
+            assertTrue(firstCoordinator.tryConsume(capacityKey, 5, 1, Instant.now()) >= 0,
+                    "First coordinator should consume available tokens");
+        }
+        for (int i = 0; i < 2; i++) {
+            assertTrue(secondCoordinator.tryConsume(capacityKey, 5, 1, Instant.now()) >= 0, "Second coordinator should consume the shared tokens");
+        }
+        assertEquals(-1L, firstCoordinator.tryConsume(capacityKey, 5, 1, Instant.now()));
+        assertEquals(-1L, secondCoordinator.tryConsume(capacityKey, 5, 1, Instant.now()));
+    }
 
     @BeforeEach
     void cleanRedis() {
         StringRedisTemplate redisTemplate = createRedisTemplate();
         Objects.requireNonNull(redisTemplate.getConnectionFactory()).getConnection().serverCommands().flushDb();
     }
-
 
     private static class MutableClock extends Clock {
         private Instant currentTime;

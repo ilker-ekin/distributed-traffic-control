@@ -97,7 +97,11 @@ class TrafficDecisionEngineTest {
 
         MutableClock clock = new MutableClock(Instant.parse("2026-08-28T10:00:00Z"));
         TrafficPolicy policy = new TrafficPolicy("refill-policy", "Refill Traffic Policy", TrafficPolicyType.TOKEN_BUCKET, PolicyStatus.ACTIVE, 1, 1, Instant.now(clock));
-        TrafficDecisionEngine trafficDecisionEngine = createTrafficDecisionEngine(policy, new InMemoryQuotaCoordinator(clock));
+        TrafficDecisionEngine trafficDecisionEngine =
+                createTrafficDecisionEngine(
+                        policy,
+                        new InMemoryQuotaCoordinator(clock),
+                        new InMemoryDistributedTokenBucket(clock));
         TrafficRequest request = new TrafficRequest("request-1", new TrafficSubject("user-123", TrafficSubjectType.USER), "/api/orders", Instant.now(clock));
         TrafficDecision firstDecision = trafficDecisionEngine.evaluate(request);
         TrafficDecision secondDecision = trafficDecisionEngine.evaluate(request);
@@ -114,7 +118,11 @@ class TrafficDecisionEngineTest {
         MutableClock clock = new MutableClock(Instant.parse("2026-08-28T10:00:00Z"));
         int capacity = 5;
         TrafficPolicy policy = new TrafficPolicy("capacity-policy", "Capacity Traffic Policy", TrafficPolicyType.TOKEN_BUCKET, PolicyStatus.ACTIVE, capacity, 2, Instant.now(clock));
-        TrafficDecisionEngine trafficDecisionEngine = createTrafficDecisionEngine(policy, new InMemoryQuotaCoordinator(clock));
+        TrafficDecisionEngine trafficDecisionEngine =
+                createTrafficDecisionEngine(
+                        policy,
+                        new InMemoryQuotaCoordinator(clock),
+                        new InMemoryDistributedTokenBucket(clock));
         TrafficRequest request = new TrafficRequest("request-1", new TrafficSubject("user-123", TrafficSubjectType.USER), "/api/orders", Instant.now(clock));
 
         for (int i = 0; i < capacity; i++) {
@@ -139,7 +147,15 @@ class TrafficDecisionEngineTest {
 
     @Test
     void shouldAllowRequestWhenLocalQuotaIsExhaustedAndCapacityIsAllocated() {
-        TrafficPolicy policy = new TrafficPolicy("allocation-policy", "Allocation Traffic Policy", TrafficPolicyType.TOKEN_BUCKET, PolicyStatus.ACTIVE, 1, 1, Instant.parse("2026-08-28T10:00:00Z"));
+        TrafficPolicy policy = new TrafficPolicy(
+                "allocation-policy",
+                "Allocation Traffic Policy",
+                TrafficPolicyType.FIXED_WINDOW,
+                PolicyStatus.ACTIVE,
+                1,
+                1,
+                Duration.ofSeconds(60),
+                Instant.parse("2026-08-28T10:00:00Z"));
         InMemoryQuotaCoordinator quotaCoordinator = new InMemoryQuotaCoordinator();
         QuotaKey quotaKey = new QuotaKey(policy.getPolicyId(), new TrafficSubject("user-123", TrafficSubjectType.USER), "/api/orders");
         InMemoryLeaseCoordinator leaseCoordinator = new InMemoryLeaseCoordinator();
@@ -151,7 +167,14 @@ class TrafficDecisionEngineTest {
         Clock clock = Clock.fixed(Instant.parse("2026-08-28T10:00:00Z"), ZoneOffset.UTC);
         LeaseStore leaseStore = new InMemoryLeaseStore();
         InMemoryCapacityAllocator capacityAllocator = new InMemoryCapacityAllocator(leaseCoordinator, new FixedAllocationStrategy(), allocationProperties, leaseStore, clock);
-        TrafficDecisionEngine trafficDecisionEngine = new TrafficDecisionEngine(new InMemoryPolicyProvider(policy), quotaCoordinator, capacityAllocator);
+        TrafficDecisionEngine trafficDecisionEngine =
+                new TrafficDecisionEngine(
+                        new InMemoryPolicyProvider(policy),
+                        quotaCoordinator,
+                        capacityAllocator,
+                        null,
+                        null,
+                        new InMemoryDistributedTokenBucket());
         TrafficRequest request = new TrafficRequest("request-1", new TrafficSubject("user-123", TrafficSubjectType.USER), "/api/orders", Instant.parse("2026-08-28T10:00:00Z"));
         TrafficDecision firstDecision = trafficDecisionEngine.evaluate(request);
         TrafficDecision secondDecision = trafficDecisionEngine.evaluate(request);
@@ -181,7 +204,13 @@ class TrafficDecisionEngineTest {
             }
         };
 
-        return new TrafficDecisionEngine(new InMemoryPolicyProvider(policy), quotaCoordinator, noOpCapacityAllocator);
+        return new TrafficDecisionEngine(
+                new InMemoryPolicyProvider(policy),
+                quotaCoordinator,
+                noOpCapacityAllocator,
+                null,
+                null,
+                new InMemoryDistributedTokenBucket());
     }
 
     @Test
@@ -206,7 +235,14 @@ class TrafficDecisionEngineTest {
             }
         };
 
-        TrafficDecisionEngine trafficDecisionEngine = new TrafficDecisionEngine(new InMemoryPolicyProvider(policy), quotaCoordinator, capacityAllocator);
+        TrafficDecisionEngine trafficDecisionEngine =
+                new TrafficDecisionEngine(
+                        new InMemoryPolicyProvider(policy),
+                        quotaCoordinator,
+                        capacityAllocator,
+                        null,
+                        null,
+                        new InMemoryDistributedTokenBucket());
 
         TrafficRequest request = new TrafficRequest("request-1", new TrafficSubject("user-123", TrafficSubjectType.USER), "/api/orders", Instant.parse("2026-08-28T10:00:00Z"));
 
@@ -221,6 +257,36 @@ class TrafficDecisionEngineTest {
         assertFalse(secondDecision.isAllowed());
 
         assertEquals("Traffic quota exhausted", secondDecision.getReason());
+    }
+
+
+    private TrafficDecisionEngine createTrafficDecisionEngine(
+            TrafficPolicy policy,
+            InMemoryQuotaCoordinator quotaCoordinator,
+            InMemoryDistributedTokenBucket distributedTokenBucket) {
+
+        CapacityAllocator noOpCapacityAllocator = new CapacityAllocator() {
+            @Override
+            public Optional<QuotaLease> allocate(
+                    TrafficPolicy trafficPolicy, QuotaKey quotaKey) {
+                return Optional.empty();
+            }
+
+            @Override
+            public LeaseConsumptionResult tryConsume(
+                    QuotaLease lease, Instant currentTime) {
+                return new LeaseConsumptionResult(
+                        false, lease.getRemainingCapacity());
+            }
+        };
+
+        return new TrafficDecisionEngine(
+                new InMemoryPolicyProvider(policy),
+                quotaCoordinator,
+                noOpCapacityAllocator,
+                null,
+                null,
+                distributedTokenBucket);
     }
 
     private static class MutableClock extends Clock {

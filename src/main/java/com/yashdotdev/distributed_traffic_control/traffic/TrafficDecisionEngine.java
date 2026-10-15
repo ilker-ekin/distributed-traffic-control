@@ -1,11 +1,14 @@
 package com.yashdotdev.distributed_traffic_control.traffic;
 
 import com.yashdotdev.distributed_traffic_control.allocation.CapacityAllocator;
+import com.yashdotdev.distributed_traffic_control.lease.DistributedTokenBucket;
+import com.yashdotdev.distributed_traffic_control.lease.GlobalCapacityKey;
 import com.yashdotdev.distributed_traffic_control.lease.LeaseConsumptionResult;
 import com.yashdotdev.distributed_traffic_control.lease.QuotaLease;
 import com.yashdotdev.distributed_traffic_control.monitoring.TrafficControlMetrics;
 import com.yashdotdev.distributed_traffic_control.policy.PolicyProvider;
 import com.yashdotdev.distributed_traffic_control.policy.TrafficPolicy;
+import com.yashdotdev.distributed_traffic_control.policy.TrafficPolicyType;
 import com.yashdotdev.distributed_traffic_control.quota.QuotaConsumptionResult;
 import com.yashdotdev.distributed_traffic_control.quota.QuotaCoordinator;
 import com.yashdotdev.distributed_traffic_control.quota.QuotaKey;
@@ -22,12 +25,14 @@ public class TrafficDecisionEngine {
     private final CapacityAllocator capacityAllocator;
     private final TrafficControlMetrics metrics;
     private final ObservationRegistry observationRegistry;
+    private final DistributedTokenBucket distributedTokenBucket;
 
     public TrafficDecisionEngine(
             PolicyProvider policyProvider,
             QuotaCoordinator quotaCoordinator,
             CapacityAllocator capacityAllocator) {
-        this(policyProvider, quotaCoordinator, capacityAllocator, null, null);
+        this(policyProvider, quotaCoordinator, capacityAllocator,
+                null, null, null);
     }
 
     public TrafficDecisionEngine(
@@ -35,7 +40,8 @@ public class TrafficDecisionEngine {
             QuotaCoordinator quotaCoordinator,
             CapacityAllocator capacityAllocator,
             TrafficControlMetrics metrics) {
-        this(policyProvider, quotaCoordinator, capacityAllocator, metrics, null);
+        this(policyProvider, quotaCoordinator, capacityAllocator,
+                metrics, null, null);
     }
 
     public TrafficDecisionEngine(
@@ -44,11 +50,23 @@ public class TrafficDecisionEngine {
             CapacityAllocator capacityAllocator,
             TrafficControlMetrics metrics,
             ObservationRegistry observationRegistry) {
+        this(policyProvider, quotaCoordinator, capacityAllocator,
+                metrics, observationRegistry, null);
+    }
+
+    public TrafficDecisionEngine(
+            PolicyProvider policyProvider,
+            QuotaCoordinator quotaCoordinator,
+            CapacityAllocator capacityAllocator,
+            TrafficControlMetrics metrics,
+            ObservationRegistry observationRegistry,
+            DistributedTokenBucket distributedTokenBucket) {
         this.policyProvider = policyProvider;
         this.quotaCoordinator = quotaCoordinator;
         this.capacityAllocator = capacityAllocator;
         this.metrics = metrics;
         this.observationRegistry = observationRegistry;
+        this.distributedTokenBucket = distributedTokenBucket;
     }
 
     public TrafficDecision evaluate(TrafficRequest request) {
@@ -87,6 +105,41 @@ public class TrafficDecisionEngine {
                     trafficPolicy.getPolicyId(),
                     request.getSubject(),
                     request.getResource());
+
+            if (trafficPolicy.getType() == TrafficPolicyType.TOKEN_BUCKET) {
+                if (distributedTokenBucket == null) {
+                    throw new IllegalStateException(
+                            "Distributed token bucket is required for TOKEN_BUCKET policies");
+                }
+
+                GlobalCapacityKey capacityKey = new GlobalCapacityKey(
+                        trafficPolicy.getPolicyId(),
+                        request.getResource());
+
+                long remainingCapacity = observe(
+                        "traffic.token-bucket.consume",
+                        () -> distributedTokenBucket.tryConsume(
+                                capacityKey,
+                                trafficPolicy.getCapacity(),
+                                trafficPolicy.getRefillRate(),
+                                request.getRequestedAt()));
+
+                if (remainingCapacity >= 0) {
+                    recordAllowed();
+                    return new TrafficDecision(
+                            TrafficDecisionStatus.ALLOWED,
+                            "Request allowed",
+                            remainingCapacity);
+                }
+
+                recordQuotaExhausted();
+                recordRejected();
+
+                return new TrafficDecision(
+                        TrafficDecisionStatus.REJECTED,
+                        "Traffic quota exhausted",
+                        0);
+            }
 
             QuotaConsumptionResult consumptionResult = observe(
                     "traffic.quota.evaluate",
