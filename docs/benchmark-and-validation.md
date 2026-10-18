@@ -744,6 +744,19 @@ Current validated performance:
 
 These results are environment-specific and should be treated as benchmark observations, not universal capacity guarantees.
 
+## Benchmark summary artifacts
+
+Both k6 scripts use `load-tests/lib/summary.js`. Each run prints a short console summary and writes `k6-summary-<scenario>-<timestamp>.json` to the k6 working directory, containing the scenario, the run parameters, latency p50/p90/p95/p99, throughput, HTTP failure rate, check pass rate, each threshold with its pass/fail result, and the raw values of every k6 metric.
+
+Run the scripts from a file path (not `k6 run -`) so the shared module resolves, for example `k6 run load-tests/baseline.js`. Two runs are compared by diffing their JSON files.
+
+When comparing runs:
+
+- Only compare runs of the same scenario and parameters on the same environment; absolute latency and throughput depend on the host, Docker resources and network path.
+- The HTTP failure rate counts HTTP errors only. `HTTP 200 + REJECTED` is successful enforcement (see section 14), so use `traffic_decision_allowed` / `traffic_decision_rejected` in the distributed results for the admission split.
+- The distributed scenario exhausts the global capacity pool, so start each comparable run from the same Redis state.
+- p99 and max are sensitive to warm-up and short runs; prefer p50–p95 for run-to-run comparison.
+
 ---
 
 # 19. Validation Checklist
