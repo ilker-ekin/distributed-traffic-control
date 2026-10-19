@@ -2,6 +2,7 @@
 import http from 'k6/http';
 import { check } from 'k6';
 import { Counter, Rate } from 'k6/metrics';
+import { createSummaryHandler, SUMMARY_TREND_STATS } from './lib/summary.js';
 
 export const options = {
     vus: 1,
@@ -10,6 +11,7 @@ export const options = {
         http_req_failed: ['rate<0.001'],
         http_req_duration: ['p(95)<500'],
     },
+    summaryTrendStats: SUMMARY_TREND_STATS,
 };
 
 const GATEWAY_URLS = (
@@ -27,6 +29,11 @@ if (GATEWAY_URLS.length === 0) {
 const gatewayRequests = GATEWAY_URLS.map(
     (_, index) => new Counter(`gateway_${index + 1}_requests`)
 );
+
+export const handleSummary = createSummaryHandler('distributed', {
+    ...options,
+    gatewayUrls: GATEWAY_URLS,
+});
 
 const allowedDecisions = new Rate('traffic_decision_allowed');
 const rejectedDecisions = new Rate('traffic_decision_rejected');

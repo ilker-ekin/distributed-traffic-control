@@ -1,5 +1,6 @@
 import http from 'k6/http';
 import {check} from 'k6';
+import {createSummaryHandler, SUMMARY_TREND_STATS} from './lib/summary.js';
 
 export const options = {
     vus: 10, duration: '30s',
@@ -7,9 +8,13 @@ export const options = {
     thresholds: {
         http_req_failed: ['rate<0.05'], http_req_duration: ['p(95)<500'],
     },
+
+    summaryTrendStats: SUMMARY_TREND_STATS,
 };
 
 const BASE_URL = __ENV.BASE_URL || 'http://host.docker.internal:8081';
+
+export const handleSummary = createSummaryHandler('baseline', {...options, baseUrl: BASE_URL});
 
 export default function () {
     const payload = JSON.stringify({
