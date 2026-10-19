@@ -24,7 +24,6 @@ import java.util.concurrent.Future;
 
 import com.yashdotdev.distributed_traffic_control.policy.DefaultPolicyManagementService;
 import java.time.Duration;
-import com.yashdotdev.distributed_traffic_control.policy.DefaultPolicyManagementService;
 
 import static org.junit.jupiter.api.Assertions.*;
 
