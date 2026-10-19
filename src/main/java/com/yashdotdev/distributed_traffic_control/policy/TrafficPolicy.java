@@ -48,4 +48,16 @@ public class TrafficPolicy {
     public boolean isActive() {
         return status == PolicyStatus.ACTIVE;
     }
+    public TrafficPolicy withStatus(PolicyStatus newStatus) {
+        return new TrafficPolicy(
+                policyId,
+                name,
+                type,
+                Objects.requireNonNull(newStatus, "status must not be null"),
+                capacity,
+                refillRate,
+                windowDuration,
+                createdAt
+        );
+    }
 }

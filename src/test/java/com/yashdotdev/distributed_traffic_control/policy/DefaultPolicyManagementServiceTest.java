@@ -1,13 +1,14 @@
 package com.yashdotdev.distributed_traffic_control.policy;
 
 import com.yashdotdev.distributed_traffic_control.traffic.TrafficRequest;
+import com.yashdotdev.distributed_traffic_control.policy.PolicyNotFoundException;
+
 import org.junit.jupiter.api.Test;
 
 import java.time.Duration;
 import java.time.Instant;
 
 import static org.junit.jupiter.api.Assertions.*;
-
 class DefaultPolicyManagementServiceTest {
 
     private static final Instant CREATED_AT = Instant.parse("2026-09-03T00:00:00Z");
@@ -54,4 +55,83 @@ class DefaultPolicyManagementServiceTest {
     private TrafficRequest createRequest(String resource) {
         return new TrafficRequest("request-1", new com.yashdotdev.distributed_traffic_control.traffic.TrafficSubject("user-123", com.yashdotdev.distributed_traffic_control.traffic.TrafficSubjectType.USER), resource, CREATED_AT);
     }
+
+
+    @Test
+    void shouldActivateInactivePolicyAndPreserveItsFields() {
+        InMemoryPolicyProvider provider = new InMemoryPolicyProvider();
+        DefaultPolicyManagementService service = new DefaultPolicyManagementService(provider);
+
+        TrafficPolicy original = new TrafficPolicy(
+                "orders-policy", "Orders", TrafficPolicyType.TOKEN_BUCKET,
+                PolicyStatus.INACTIVE, 10, 2, Duration.ofMinutes(1), CREATED_AT
+        );
+        service.registerPolicy("/api/orders", original);
+
+        TrafficPolicy result = service.activatePolicy("/api/orders");
+
+        assertEquals(PolicyStatus.ACTIVE, result.getStatus());
+        assertEquals(original.getPolicyId(), result.getPolicyId());
+        assertEquals(original.getName(), result.getName());
+        assertEquals(original.getType(), result.getType());
+        assertEquals(original.getCapacity(), result.getCapacity());
+        assertEquals(original.getRefillRate(), result.getRefillRate());
+        assertEquals(original.getWindowDuration(), result.getWindowDuration());
+        assertEquals(original.getCreatedAt(), result.getCreatedAt());
+        assertSame(result, provider.findPolicy("/api/orders").orElseThrow());
+    }
+
+    @Test
+    void shouldDeactivateActivePolicy() {
+        InMemoryPolicyProvider provider = new InMemoryPolicyProvider();
+        DefaultPolicyManagementService service = new DefaultPolicyManagementService(provider);
+        service.registerPolicy("/api/orders",
+                createPolicy("orders-policy", TrafficPolicyType.TOKEN_BUCKET));
+
+        TrafficPolicy result = service.deactivatePolicy("/api/orders");
+
+        assertEquals(PolicyStatus.INACTIVE, result.getStatus());
+        assertEquals(PolicyStatus.INACTIVE,
+                provider.findPolicy("/api/orders").orElseThrow().getStatus());
+    }
+
+    @Test
+    void activatingAnAlreadyActivePolicyShouldBeIdempotent() {
+        InMemoryPolicyProvider provider = new InMemoryPolicyProvider();
+        DefaultPolicyManagementService service = new DefaultPolicyManagementService(provider);
+        service.registerPolicy("/api/orders",
+                createPolicy("orders-policy", TrafficPolicyType.TOKEN_BUCKET));
+
+        TrafficPolicy first = service.activatePolicy("/api/orders");
+        TrafficPolicy second = service.activatePolicy("/api/orders");
+
+        assertEquals(PolicyStatus.ACTIVE, second.getStatus());
+        assertEquals(first.getPolicyId(), second.getPolicyId());
+        assertEquals(first.getCreatedAt(), second.getCreatedAt());
+    }
+
+    @Test
+    void deactivatingAnAlreadyInactivePolicyShouldBeIdempotent() {
+        InMemoryPolicyProvider provider = new InMemoryPolicyProvider();
+        DefaultPolicyManagementService service = new DefaultPolicyManagementService(provider);
+        service.registerPolicy("/api/orders",
+                createPolicy("orders-policy", TrafficPolicyType.TOKEN_BUCKET));
+
+        service.deactivatePolicy("/api/orders");
+        TrafficPolicy second = service.deactivatePolicy("/api/orders");
+
+        assertEquals(PolicyStatus.INACTIVE, second.getStatus());
+    }
+
+    @Test
+    void changingStatusOfMissingPolicyShouldThrowException() {
+        InMemoryPolicyProvider provider = new InMemoryPolicyProvider();
+        DefaultPolicyManagementService service = new DefaultPolicyManagementService(provider);
+
+        assertThrows(PolicyNotFoundException.class,
+                () -> service.activatePolicy("/api/missing"));
+        assertThrows(PolicyNotFoundException.class,
+                () -> service.deactivatePolicy("/api/missing"));
+    }
+
 }

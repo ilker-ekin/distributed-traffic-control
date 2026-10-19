@@ -9,6 +9,8 @@ public interface PolicyManagementService {
     Optional<TrafficPolicy> findPolicy(String resource);
     List<PolicyRegistration> findAllPolicies();
     TrafficPolicy updatePolicy(String resource, TrafficPolicy policy);
+    TrafficPolicy activatePolicy(String resource);
+    TrafficPolicy deactivatePolicy(String resource);
     void removePolicy(String resource);
     void setDefaultPolicy(TrafficPolicy policy);
 }
