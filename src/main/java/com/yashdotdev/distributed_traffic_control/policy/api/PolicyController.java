@@ -7,6 +7,7 @@ import jakarta.validation.Valid;
 import lombok.RequiredArgsConstructor;
 import org.springframework.http.ResponseEntity;
 import org.springframework.web.bind.annotation.*;
+import com.yashdotdev.distributed_traffic_control.policy.PolicyNotFoundException;
 
 import java.util.List;
 
@@ -48,6 +49,42 @@ public class PolicyController {
         policyManagementService.removePolicy(resource);
         return ResponseEntity.noContent().build();
     }
+
+
+    @PostMapping("/activate")
+    public ResponseEntity<PolicyResponse> activatePolicy(
+            @RequestParam String resource) {
+
+        if (resource.isBlank()) {
+            return ResponseEntity.badRequest().build();
+        }
+
+        try {
+            TrafficPolicy policy =
+                    policyManagementService.activatePolicy(resource);
+            return ResponseEntity.ok(toResponse(resource, policy));
+        } catch (PolicyNotFoundException exception) {
+            return ResponseEntity.notFound().build();
+        }
+    }
+
+    @PostMapping("/deactivate")
+    public ResponseEntity<PolicyResponse> deactivatePolicy(
+            @RequestParam String resource) {
+
+        if (resource.isBlank()) {
+            return ResponseEntity.badRequest().build();
+        }
+
+        try {
+            TrafficPolicy policy =
+                    policyManagementService.deactivatePolicy(resource);
+            return ResponseEntity.ok(toResponse(resource, policy));
+        } catch (PolicyNotFoundException exception) {
+            return ResponseEntity.notFound().build();
+        }
+    }
+
 
     private TrafficPolicy toPolicy(PolicyCreateRequest request) {
         return new TrafficPolicy(request.getPolicyId(), request.getName(), request.getType(), request.getStatus(), request.getCapacity(), request.getRefillRate(), request.getWindowDuration(), request.getCreatedAt());

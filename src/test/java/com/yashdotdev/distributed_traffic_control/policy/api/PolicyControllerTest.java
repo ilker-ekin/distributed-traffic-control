@@ -3,6 +3,7 @@ package com.yashdotdev.distributed_traffic_control.policy.api;
 import com.yashdotdev.distributed_traffic_control.policy.PolicyManagementService;
 import com.yashdotdev.distributed_traffic_control.policy.PolicyStatus;
 import com.yashdotdev.distributed_traffic_control.policy.TrafficPolicy;
+import com.yashdotdev.distributed_traffic_control.policy.PolicyNotFoundException;
 import com.yashdotdev.distributed_traffic_control.policy.TrafficPolicyType;
 import org.junit.jupiter.api.Test;
 import org.springframework.beans.factory.annotation.Autowired;
@@ -21,7 +22,6 @@ import static org.mockito.Mockito.when;
 import static org.springframework.test.web.servlet.request.MockMvcRequestBuilders.delete;
 import static org.springframework.test.web.servlet.request.MockMvcRequestBuilders.post;
 import static org.springframework.test.web.servlet.result.MockMvcResultMatchers.*;
-
 @WebMvcTest(PolicyController.class)
 class PolicyControllerTest {
 
@@ -198,6 +198,77 @@ class PolicyControllerTest {
                                         }
                                         """)
                 )
+                .andExpect(status().isBadRequest());
+    }
+
+
+    @Test
+    void shouldActivatePolicy() throws Exception {
+        TrafficPolicy policy = new TrafficPolicy(
+                "orders-policy", "Orders Policy",
+                TrafficPolicyType.TOKEN_BUCKET, PolicyStatus.ACTIVE,
+                100, 10, null,
+                Instant.parse("2026-09-04T00:00:00Z")
+        );
+
+        when(policyManagementService.activatePolicy("/api/orders"))
+                .thenReturn(policy);
+
+        mockMvc.perform(post("/api/v1/policies/activate")
+                        .param("resource", "/api/orders"))
+                .andExpect(status().isOk())
+                .andExpect(jsonPath("$.policyId").value("orders-policy"))
+                .andExpect(jsonPath("$.status").value("ACTIVE"))
+                .andExpect(jsonPath("$.resource").value("/api/orders"));
+
+        verify(policyManagementService).activatePolicy("/api/orders");
+    }
+
+    @Test
+    void shouldDeactivatePolicy() throws Exception {
+        TrafficPolicy policy = new TrafficPolicy(
+                "orders-policy", "Orders Policy",
+                TrafficPolicyType.TOKEN_BUCKET, PolicyStatus.INACTIVE,
+                100, 10, null,
+                Instant.parse("2026-09-04T00:00:00Z")
+        );
+
+        when(policyManagementService.deactivatePolicy("/api/orders"))
+                .thenReturn(policy);
+
+        mockMvc.perform(post("/api/v1/policies/deactivate")
+                        .param("resource", "/api/orders"))
+                .andExpect(status().isOk())
+                .andExpect(jsonPath("$.policyId").value("orders-policy"))
+                .andExpect(jsonPath("$.status").value("INACTIVE"))
+                .andExpect(jsonPath("$.resource").value("/api/orders"));
+
+        verify(policyManagementService).deactivatePolicy("/api/orders");
+    }
+
+    @Test
+    void shouldReturnNotFoundWhenActivatingMissingPolicy() throws Exception {
+        when(policyManagementService.activatePolicy("/api/missing"))
+                .thenThrow(new PolicyNotFoundException("/api/missing"));
+
+        mockMvc.perform(post("/api/v1/policies/activate")
+                        .param("resource", "/api/missing"))
+                .andExpect(status().isNotFound());
+    }
+
+    @Test
+    void shouldReturnNotFoundWhenDeactivatingMissingPolicy() throws Exception {
+        when(policyManagementService.deactivatePolicy("/api/missing"))
+                .thenThrow(new PolicyNotFoundException("/api/missing"));
+
+        mockMvc.perform(post("/api/v1/policies/deactivate")
+                        .param("resource", "/api/missing"))
+                .andExpect(status().isNotFound());
+    }
+    @Test
+    void shouldReturnBadRequestForBlankResourceWhenActivatingPolicy() throws Exception {
+        mockMvc.perform(post("/api/v1/policies/activate")
+                        .param("resource", " "))
                 .andExpect(status().isBadRequest());
     }
 }

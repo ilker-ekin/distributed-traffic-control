@@ -22,6 +22,10 @@ import java.util.concurrent.ExecutorService;
 import java.util.concurrent.Executors;
 import java.util.concurrent.Future;
 
+import com.yashdotdev.distributed_traffic_control.policy.DefaultPolicyManagementService;
+import java.time.Duration;
+import com.yashdotdev.distributed_traffic_control.policy.DefaultPolicyManagementService;
+
 import static org.junit.jupiter.api.Assertions.*;
 
 class TrafficDecisionEngineTest {
@@ -37,6 +41,77 @@ class TrafficDecisionEngineTest {
 
         assertTrue(decision.isAllowed());
     }
+
+
+    @Test
+    void shouldRejectRequestsAfterPolicyIsDeactivated() {
+        Instant now = Instant.now();
+
+        TrafficPolicy policy = new TrafficPolicy(
+                "orders-policy",
+                "Orders Policy",
+                TrafficPolicyType.TOKEN_BUCKET,
+                PolicyStatus.ACTIVE,
+                100,
+                10,
+                now
+        );
+
+        // Both components share the same provider.
+        InMemoryPolicyProvider provider = new InMemoryPolicyProvider();
+        DefaultPolicyManagementService policyService =
+                new DefaultPolicyManagementService(provider);
+        policyService.registerPolicy("/api/orders", policy);
+
+        CapacityAllocator noOpAllocator = new CapacityAllocator() {
+            @Override
+            public Optional<QuotaLease> allocate(
+                    TrafficPolicy trafficPolicy, QuotaKey quotaKey) {
+                return Optional.empty();
+            }
+
+            @Override
+            public LeaseConsumptionResult tryConsume(
+                    QuotaLease lease, Instant currentTime) {
+                return new LeaseConsumptionResult(
+                        false, lease.getRemainingCapacity());
+            }
+        };
+
+        TrafficDecisionEngine engine = new TrafficDecisionEngine(
+                provider,
+                new InMemoryQuotaCoordinator(),
+                noOpAllocator,
+                null,
+                null,
+                new InMemoryDistributedTokenBucket()
+        );
+
+        TrafficSubject subject =
+                new TrafficSubject("user-123", TrafficSubjectType.USER);
+
+        TrafficRequest firstRequest = new TrafficRequest(
+                "request-1", subject, "/api/orders", now);
+
+        // The active policy allows the request.
+        assertTrue(engine.evaluate(firstRequest).isAllowed());
+
+        // Deactivate the policy through the service.
+        TrafficPolicy deactivated =
+                policyService.deactivatePolicy("/api/orders");
+
+        assertEquals(PolicyStatus.INACTIVE, deactivated.getStatus());
+
+        TrafficRequest secondRequest = new TrafficRequest(
+                "request-2", subject, "/api/orders", now);
+
+        // The engine must see the updated policy and reject the request.
+        TrafficDecision decision = engine.evaluate(secondRequest);
+
+        assertFalse(decision.isAllowed());
+        assertEquals("Traffic policy is inactive", decision.getReason());
+    }
+
 
     @Test
     void shouldRejectRequestWhenQuotaIsExhausted() {

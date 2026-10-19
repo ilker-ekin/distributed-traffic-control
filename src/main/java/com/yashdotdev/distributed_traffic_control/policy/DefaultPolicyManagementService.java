@@ -38,6 +38,26 @@ public class DefaultPolicyManagementService implements PolicyManagementService {
     }
 
     @Override
+    public TrafficPolicy activatePolicy(String resource) {
+        return changePolicyStatus(resource, PolicyStatus.ACTIVE);
+    }
+
+    @Override
+    public TrafficPolicy deactivatePolicy(String resource) {
+        return changePolicyStatus(resource, PolicyStatus.INACTIVE);
+    }
+
+    private TrafficPolicy changePolicyStatus(String resource, PolicyStatus status) {
+        TrafficPolicy policy = policyProvider.findPolicy(resource)
+                .orElseThrow(() -> new PolicyNotFoundException(resource));
+
+        TrafficPolicy updatedPolicy = policy.withStatus(status);
+        policyProvider.registerPolicy(resource, updatedPolicy);
+
+        return updatedPolicy;
+    }
+
+    @Override
     public void removePolicy(String resource) {
         policyProvider.removePolicy(resource);
     }
